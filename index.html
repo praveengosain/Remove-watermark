@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Watermark Remover</title>
+  <meta name="description" content="A browser-based image retouching tool using inpainting.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header class="hero">
+      <div>
+        <span class="badge">100% Browser Based</span>
+        <h1>Watermark Remover</h1>
+        <p>Upload an image, paint over the watermark, and use inpainting to reconstruct the selected area.</p>
+      </div>
+      <button id="uploadBtn" class="primary">Upload Image</button>
+      <input id="fileInput" type="file" accept="image/png,image/jpeg,image/webp" hidden>
+    </header>
+
+    <section class="notice">
+      <strong>Use responsibly:</strong> only edit images you own or have permission to modify.
+      Processing happens locally in your browser; your image is not uploaded to a server.
+    </section>
+
+    <section class="workspace">
+      <div class="toolbar">
+        <button id="brushBtn" class="tool active">Brush</button>
+        <button id="eraseBtn" class="tool">Erase Selection</button>
+        <label class="slider">
+          Brush size
+          <input id="brushSize" type="range" min="5" max="150" value="35">
+          <output id="brushValue">35 px</output>
+        </label>
+        <label class="slider">
+          Inpaint radius
+          <input id="radius" type="range" min="1" max="15" value="5">
+          <output id="radiusValue">5</output>
+        </label>
+        <select id="method" title="Inpainting method">
+          <option value="telea">Telea</option>
+          <option value="ns">Navier-Stokes</option>
+        </select>
+        <button id="removeBtn" class="primary" disabled>Remove Selected Area</button>
+        <button id="resetBtn" class="tool" disabled>Reset</button>
+        <button id="downloadBtn" class="tool" disabled>Download</button>
+      </div>
+
+      <div id="canvasWrap" class="canvas-wrap empty">
+        <div id="emptyState">
+          <div class="upload-icon">＋</div>
+          <h2>Upload an image</h2>
+          <p>Then paint over the watermark or unwanted area.</p>
+          <button id="emptyUpload" class="secondary">Choose Image</button>
+        </div>
+        <canvas id="imageCanvas"></canvas>
+        <canvas id="maskCanvas"></canvas>
+      </div>
+
+      <div class="status" id="status">Open an image to begin.</div>
+    </section>
+  </main>
+
+  <script async src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
