@@ -5,7 +5,6 @@ let imageLoaded = false;
 let drawing = false;
 let eraseMode = false;
 let lastPoint = null;
-let imageScale = 1;
 
 const fileInput = document.getElementById("fileInput");
 const uploadBtn = document.getElementById("uploadBtn");
@@ -26,13 +25,15 @@ const brushBtn = document.getElementById("brushBtn");
 const eraseBtn = document.getElementById("eraseBtn");
 const method = document.getElementById("method");
 
-function setStatus(text) { status.textContent = text; }
+function setStatus(text) {
+  status.textContent = text;
+}
 
-window.Module = window.Module || {};
-const waitForCV = setInterval(() => {
-  if (window.cv && typeof cv.Mat === "function") {
+// Wait until OpenCV.js has finished loading.
+const cvTimer = setInterval(() => {
+  if (window.cv && typeof cv.Mat === "function" && cv.imread) {
     cvReady = true;
-    clearInterval(waitForCV);
+    clearInterval(cvTimer);
     setStatus(imageLoaded ? "Ready. Paint over the watermark." : "Open an image to begin.");
   }
 }, 100);
@@ -44,14 +45,20 @@ fileInput.addEventListener("change", () => {
   if (file) loadImage(file);
 });
 
-brushSize.addEventListener("input", () => brushValue.textContent = `${brushSize.value} px`);
-radius.addEventListener("input", () => radiusValue.textContent = radius.value);
+brushSize.addEventListener("input", () => {
+  brushValue.textContent = `${brushSize.value} px`;
+});
+
+radius.addEventListener("input", () => {
+  radiusValue.textContent = radius.value;
+});
 
 brushBtn.onclick = () => {
   eraseMode = false;
   brushBtn.classList.add("active");
   eraseBtn.classList.remove("active");
 };
+
 eraseBtn.onclick = () => {
   eraseMode = true;
   eraseBtn.classList.add("active");
@@ -60,27 +67,26 @@ eraseBtn.onclick = () => {
 
 function loadImage(file) {
   if (!file.type.startsWith("image/")) return;
+
   const url = URL.createObjectURL(file);
   const img = new Image();
+
   img.onload = () => {
     URL.revokeObjectURL(url);
 
-    // Keep processing memory reasonable for GitHub Pages/browser use.
-    const maxSide = 2400;
+    // Limit huge images to keep browser memory manageable.
+    const maxSide = 2200;
     const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
-    imageScale = scale;
 
-    imageCanvas.width = Math.round(img.naturalWidth * scale);
-    imageCanvas.height = Math.round(img.naturalHeight * scale);
+    imageCanvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    imageCanvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+
     const ctx = imageCanvas.getContext("2d", { willReadFrequently: true });
     ctx.clearRect(0, 0, imageCanvas.width, imageCanvas.height);
     ctx.drawImage(img, 0, 0, imageCanvas.width, imageCanvas.height);
 
     maskCanvas.width = imageCanvas.width;
     maskCanvas.height = imageCanvas.height;
-    maskCanvas.style.width = `${imageCanvas.clientWidth}px`;
-    maskCanvas.style.height = `${imageCanvas.clientHeight}px`;
-    maskCanvas.style.display = "block";
 
     emptyState.style.display = "none";
     canvasWrap.classList.remove("empty");
@@ -88,25 +94,55 @@ function loadImage(file) {
 
     if (originalMat) originalMat.delete();
     if (currentMat) currentMat.delete();
-    originalMat = cv.imread(imageCanvas);
+
+    // IMPORTANT:
+    // cv.imread(canvas) returns a 4-channel RGBA Mat.
+    // cv.inpaint() expects an 8-bit 1-channel or 3-channel source.
+    // Convert RGBA -> RGB before inpainting.
+    const rgba = cv.imread(imageCanvas);
+    originalMat = new cv.Mat();
+    cv.cvtColor(rgba, originalMat, cv.COLOR_RGBA2RGB);
+    rgba.delete();
+
     currentMat = originalMat.clone();
 
     clearMask();
-    [removeBtn, resetBtn, downloadBtn].forEach(b => b.disabled = false);
-    setStatus(`Loaded ${img.naturalWidth} × ${img.naturalHeight}. Paint over the watermark, then click Remove Selected Area.`);
+
+    removeBtn.disabled = false;
+    resetBtn.disabled = false;
+    downloadBtn.disabled = false;
+
+    syncMaskSize();
+
+    const scaledText = scale < 1
+      ? ` Image was resized to ${imageCanvas.width} × ${imageCanvas.height} for browser processing.`
+      : "";
+
+    setStatus(
+      `Loaded ${img.naturalWidth} × ${img.naturalHeight}.${scaledText} ` +
+      `Paint over the watermark, then click Remove Selected Area.`
+    );
   };
+
+  img.onerror = () => {
+    URL.revokeObjectURL(url);
+    setStatus("Could not open this image.");
+  };
+
   img.src = url;
 }
 
 function syncMaskSize() {
   if (!imageLoaded) return;
+
   const rect = imageCanvas.getBoundingClientRect();
-  maskCanvas.style.left = `${imageCanvas.offsetLeft}px`;
-  maskCanvas.style.top = `${imageCanvas.offsetTop}px`;
+
+  // Position the mask exactly over the displayed image.
   maskCanvas.style.width = `${rect.width}px`;
   maskCanvas.style.height = `${rect.height}px`;
+  maskCanvas.style.left = `${imageCanvas.offsetLeft}px`;
+  maskCanvas.style.top = `${imageCanvas.offsetTop}px`;
 }
-window.addEventListener("resize", syncMaskSize);
 
 function clearMask() {
   const ctx = maskCanvas.getContext("2d");
@@ -116,58 +152,98 @@ function clearMask() {
 
 function canvasPoint(e) {
   const rect = maskCanvas.getBoundingClientRect();
+
   return {
     x: (e.clientX - rect.left) * maskCanvas.width / rect.width,
     y: (e.clientY - rect.top) * maskCanvas.height / rect.height
   };
 }
 
-maskCanvas.addEventListener("pointerdown", e => {
+maskCanvas.addEventListener("pointerdown", (e) => {
   if (!imageLoaded) return;
+
   drawing = true;
   maskCanvas.setPointerCapture(e.pointerId);
+
   lastPoint = canvasPoint(e);
   drawStroke(lastPoint, lastPoint);
 });
-maskCanvas.addEventListener("pointermove", e => {
+
+maskCanvas.addEventListener("pointermove", (e) => {
   if (!drawing) return;
-  const p = canvasPoint(e);
-  drawStroke(lastPoint, p);
-  lastPoint = p;
+
+  const point = canvasPoint(e);
+  drawStroke(lastPoint, point);
+  lastPoint = point;
 });
-maskCanvas.addEventListener("pointerup", () => { drawing = false; lastPoint = null; });
-maskCanvas.addEventListener("pointercancel", () => { drawing = false; lastPoint = null; });
+
+function stopDrawing() {
+  drawing = false;
+  lastPoint = null;
+}
+
+maskCanvas.addEventListener("pointerup", stopDrawing);
+maskCanvas.addEventListener("pointercancel", stopDrawing);
+maskCanvas.addEventListener("pointerleave", (e) => {
+  if (e.buttons === 0) stopDrawing();
+});
 
 function drawStroke(a, b) {
   const ctx = maskCanvas.getContext("2d");
+
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.lineWidth = Number(brushSize.value);
-  ctx.strokeStyle = eraseMode ? "rgba(0,0,0,0)" : "rgba(255,70,70,.55)";
+
   if (eraseMode) {
     ctx.globalCompositeOperation = "destination-out";
+    ctx.strokeStyle = "rgba(0,0,0,1)";
   } else {
     ctx.globalCompositeOperation = "source-over";
+    ctx.strokeStyle = "rgba(255,70,70,0.55)";
   }
+
   ctx.beginPath();
   ctx.moveTo(a.x, a.y);
   ctx.lineTo(b.x, b.y);
   ctx.stroke();
+
   ctx.globalCompositeOperation = "source-over";
 }
 
 removeBtn.onclick = () => {
-  if (!cvReady || !imageLoaded) return;
-  const ctx = maskCanvas.getContext("2d");
-  const data = ctx.getImageData(0, 0, maskCanvas.width, maskCanvas.height);
-  const mask = new cv.Mat(maskCanvas.height, maskCanvas.width, cv.CV_8UC1);
-  const rgba = new cv.Mat(maskCanvas.height, maskCanvas.width, cv.CV_8UC4);
-  rgba.data.set(data.data);
-  cv.cvtColor(rgba, mask, cv.COLOR_RGBA2GRAY);
-  rgba.delete();
+  if (!imageLoaded) return;
 
-  // Any painted pixel becomes part of the inpaint mask.
-  cv.threshold(mask, mask, 8, 255, cv.THRESH_BINARY);
+  if (!cvReady) {
+    setStatus("OpenCV is still loading. Please wait a moment and try again.");
+    return;
+  }
+
+  if (!currentMat || currentMat.empty()) {
+    setStatus("Please upload an image first.");
+    return;
+  }
+
+  // Build a clean 8-bit, single-channel mask from the painted canvas.
+  const mask = new cv.Mat(
+    maskCanvas.height,
+    maskCanvas.width,
+    cv.CV_8UC1,
+    new cv.Scalar(0)
+  );
+
+  const maskCtx = maskCanvas.getContext("2d", { willReadFrequently: true });
+  const pixels = maskCtx.getImageData(
+    0,
+    0,
+    maskCanvas.width,
+    maskCanvas.height
+  ).data;
+
+  // Alpha channel is enough because brush strokes are visible/opaque.
+  for (let i = 0, j = 0; i < pixels.length; i += 4, j++) {
+    mask.data[j] = pixels[i + 3] > 10 ? 255 : 0;
+  }
 
   if (cv.countNonZero(mask) === 0) {
     mask.delete();
@@ -178,41 +254,65 @@ removeBtn.onclick = () => {
   setStatus("Removing selected area…");
   removeBtn.disabled = true;
 
+  // Let the browser update the status before doing the heavier operation.
   setTimeout(() => {
     try {
-      const dst = new cv.Mat();
-      const flag = method.value === "ns" ? cv.INPAINT_NS : cv.INPAINT_TELEA;
-      cv.inpaint(currentMat, mask, Number(radius.value), dst, flag);
-      currentMat.delete();
-      currentMat = dst;
+      const result = new cv.Mat();
+
+      const inpaintMethod =
+        method.value === "ns" ? cv.INPAINT_NS : cv.INPAINT_TELEA;
+
+      cv.inpaint(
+        currentMat,
+        mask,
+        Number(radius.value),
+        result,
+        inpaintMethod
+      );
+
+      if (currentMat) currentMat.delete();
+      currentMat = result;
+
       cv.imshow(imageCanvas, currentMat);
+
       clearMask();
-      setStatus("Done. You can paint another area and run removal again.");
-    } catch (err) {
-      console.error(err);
-      setStatus("Could not process this image. Try a smaller selection.");
+
+      setStatus(
+        "Done. Paint another watermark area if needed, then remove it again."
+      );
+    } catch (error) {
+      console.error("Inpainting error:", error);
+
+      setStatus(
+        "Could not process this selection. Try a smaller painted area or a smaller image."
+      );
     } finally {
       mask.delete();
       removeBtn.disabled = false;
     }
-  }, 30);
+  }, 50);
 };
 
 resetBtn.onclick = () => {
   if (!originalMat) return;
-  currentMat.delete();
+
+  if (currentMat) currentMat.delete();
   currentMat = originalMat.clone();
+
   cv.imshow(imageCanvas, currentMat);
   clearMask();
+
   setStatus("Image reset to the original.");
 };
 
 downloadBtn.onclick = () => {
   if (!imageLoaded) return;
+
   const link = document.createElement("a");
   link.download = "edited-image.png";
   link.href = imageCanvas.toDataURL("image/png");
   link.click();
 };
 
+window.addEventListener("resize", syncMaskSize);
 window.addEventListener("load", syncMaskSize);
